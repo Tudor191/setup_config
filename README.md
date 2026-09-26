@@ -8,4 +8,5 @@ device in the PC setup as one logical device ("Setup"), and later through Amazon
 | Path | Content |
 |---|---|
 | [`docs/AUDIT_REPORT.md`](docs/AUDIT_REPORT.md) | Audit report: findings, capability matrix, recommended architecture, open decisions |
+| [`docs/AUDIT_UPDATE_01_PC_RESULTS.md`](docs/AUDIT_UPDATE_01_PC_RESULTS.md) | Results from the real PC, corrections to the report, next diagnostic test |
 | [`audit/`](audit/README.md) | Read-only PowerShell tools that collect the on-PC evidence the report still needs |

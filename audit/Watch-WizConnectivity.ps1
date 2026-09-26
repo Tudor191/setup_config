@@ -85,6 +85,17 @@ $maskedMac = $(if ($bulbMac) { Protect-WizMac $bulbMac } else { 'unknown' })
 Write-Host "Watching WiZ bulb $WizIp (MAC $maskedMac) every $IntervalSeconds s. Ctrl+C to stop."
 Write-Host "Output: $OutputDir"
 
+# Startup diagnostics: every neighbour (ARP) entry for the bulb's IP, with its interface and store.
+# PersistentStore entries are static entries that survive a reboot.
+try {
+    $active = @(Get-NetNeighbor -IPAddress $WizIp -ErrorAction SilentlyContinue)
+    $persistent = @(Get-NetNeighbor -IPAddress $WizIp -PolicyStore PersistentStore -ErrorAction SilentlyContinue)
+    $desc = @($active | ForEach-Object { "ifIndex=$($_.InterfaceIndex) '$($_.InterfaceAlias)' state=$($_.State) mac=$(Protect-WizMac $_.LinkLayerAddress)" })
+    $descP = @($persistent | ForEach-Object { "ifIndex=$($_.InterfaceIndex) '$($_.InterfaceAlias)' state=$($_.State) mac=$(Protect-WizMac $_.LinkLayerAddress)" })
+    Add-Content -LiteralPath $changesPath -Value "$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss')) START bulb=$WizIp mac=$maskedMac interval=${IntervalSeconds}s | neighbour entries (active): $(if ($desc.Count) { $desc -join '; ' } else { 'none' }) | persistent (static) entries: $(if ($descP.Count) { $descP -join '; ' } else { 'none' })"
+}
+catch { Add-Content -LiteralPath $changesPath -Value "$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss')) START (neighbour diagnostics failed: $((Get-InnermostException $_.Exception).Message))" }
+
 function Get-NeighborMacIp {
     <# Current IP of the bulb according to the neighbour table, looked up by MAC. #>
     param([string]$Mac)
@@ -109,91 +120,104 @@ $deadline = $(if ($DurationHours -gt 0) { (Get-Date).AddHours($DurationHours) } 
 $previous = $null
 $watched = @('pppUp', 'defaultRouteIf', 'internet', 'dns', 'hotspotState', 'bulbAssociated', 'wifiAdapter', 'hotspotAdapter', 'bulbIp', 'bulbInHostsIcs', 'bulbNeighbor', 'bulbPing', 'bulbApi')
 
-while ((Get-Date) -lt $deadline) {
-    $tick = Get-Date
-    try {
-        $row = [ordered]@{ time = $tick.ToString('yyyy-MM-dd HH:mm:ss') }
-
-        # --- NETWORK / PPPoE ---------------------------------------------------
-        $pppIfs = @([System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() | Where-Object { $_.NetworkInterfaceType -eq 'Ppp' })
-        $row['pppUp'] = $(if ($pppIfs.Count -eq 0) { 'NO_PPP_INTERFACE' } elseif (@($pppIfs | Where-Object { "$($_.OperationalStatus)" -eq 'Up' }).Count -gt 0) { 'UP' } else { 'DOWN' })
-        $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Sort-Object -Property { $_.RouteMetric + $_.InterfaceMetric } | Select-Object -First 1
-        $row['defaultRouteIf'] = $(if ($route) { $route.InterfaceAlias } else { 'NONE' })
-        $inet = (Test-TcpPort -HostName $InternetProbeHost -Port 443 -TimeoutMs 2000) -or (Test-TcpPort -HostName $InternetProbeHost2 -Port 443 -TimeoutMs 2000)
-        $row['internet'] = $(if ($inet) { 'OK' } else { 'FAIL' })
-        $dnsServer = $null
-        if ($route) {
-            $dnsServer = (Get-DnsClientServerAddress -InterfaceIndex $route.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1).ServerAddresses | Select-Object -First 1
-        }
-        $row['dns'] = Test-Dns -Name $DnsProbeName -Server $dnsServer
-
-        # --- HOTSPOT -----------------------------------------------------------
-        $hs = $null
-        try { $hs = Get-HotspotRuntimeState } catch { }
-        $row['hotspotState'] = $(if ($hs) { $hs.state } else { 'n/a' })
-        $row['hotspotClients'] = $(if ($hs) { $hs.clientCount } else { '' })
-        $row['bulbAssociated'] = $(if ($hs -and $bulbMac) { if (@($hs.clientMacs) -contains $bulbMac) { 'YES' } else { 'NO' } } else { 'unknown' })
-
-        $wifi = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.NdisPhysicalMedium -eq 9 -and $_.HardwareInterface } | Select-Object -First 1
-        $row['wifiAdapter'] = $(if ($wifi) { "$($wifi.Status)" } else { 'NOT_FOUND' })
-        $hsIf = Get-HotspotInterfaceIPv4
-        $hsAdapter = $(if ($hsIf) { Get-NetAdapter -IncludeHidden -InterfaceIndex $hsIf.InterfaceIndex -ErrorAction SilentlyContinue } else { $null })
-        $row['hotspotAdapter'] = $(if ($hsAdapter) { "$($hsAdapter.Status)" } else { 'NO_192.168.137.x_INTERFACE' })
-
-        # --- WIZ ---------------------------------------------------------------
-        $currentIp = Get-NeighborMacIp $bulbMac
-        if ($currentIp -and $currentIp -ne $WizIp) {
-            Add-Content -LiteralPath $changesPath -Value "$($row.time) BULB IP CHANGED $WizIp -> $currentIp"
-            $WizIp = $currentIp
-        }
-        $row['bulbIp'] = $WizIp
-        $icsEntries = @()
-        try { $icsEntries = @(Get-HostsIcsEntries) } catch { }
-        $row['bulbInHostsIcs'] = $(if (@($icsEntries | Where-Object { $_.ip -eq $WizIp }).Count -gt 0) { 'YES' } else { 'NO' })
-        $neighbor = Get-NetNeighbor -IPAddress $WizIp -ErrorAction SilentlyContinue | Select-Object -First 1
-        $row['bulbNeighbor'] = $(if ($neighbor) { "$($neighbor.State)" } else { 'NONE' })
+$lastTick = $null
+try {
+    while ((Get-Date) -lt $deadline) {
+        $tick = Get-Date
         try {
-            $reply = $ping.Send($WizIp, 1000)
-            $row['bulbPing'] = $(if ($reply.Status -eq 'Success') { 'OK' } else { "$($reply.Status)" })
-            $row['bulbPingMs'] = $(if ($reply.Status -eq 'Success') { $reply.RoundtripTime } else { '' })
-        }
-        catch { $row['bulbPing'] = 'ERROR'; $row['bulbPingMs'] = '' }
-        $pilot = Invoke-WizQuery -IpAddress $WizIp -Method getPilot -TimeoutMs 1000 -Attempts 2
-        $row['bulbApi'] = $(if ($pilot.ok -and $pilot.json -and $pilot.json.PSObject.Properties['result']) { 'ONLINE' } else { 'OFFLINE' })
-        $row['bulbApiMs'] = $(if ($row['bulbApi'] -eq 'ONLINE') { $pilot.rttMs } else { '' })
-        $row['bulbRssi'] = $(if ($row['bulbApi'] -eq 'ONLINE' -and $pilot.json.result.PSObject.Properties['rssi']) { $pilot.json.result.rssi } else { '' })
-        $row['bulbOn'] = $(if ($row['bulbApi'] -eq 'ONLINE' -and $pilot.json.result.PSObject.Properties['state']) { $pilot.json.result.state } else { '' })
-        if (-not $bulbMac -and $row['bulbApi'] -eq 'ONLINE') {
-            $sys = Invoke-WizQuery -IpAddress $WizIp -Method getSystemConfig -TimeoutMs 1000 -Attempts 2
-            if ($sys.ok -and $sys.json -and $sys.json.PSObject.Properties['result']) { $bulbMac = ConvertTo-NormalizedMac ([string]$sys.json.result.mac); $maskedMac = Protect-WizMac $bulbMac }
-        }
-        $row['bulbMac'] = $maskedMac
+            $row = [ordered]@{ time = $tick.ToString('yyyy-MM-dd HH:mm:ss') }
 
-        # --- write ---------------------------------------------------------------
-        [pscustomobject]$row | Export-Csv -LiteralPath $csvPath -Append -NoTypeInformation -Encoding UTF8
-        if ($null -ne $previous) {
-            foreach ($k in $watched) {
-                if ("$($previous[$k])" -ne "$($row[$k])") {
-                    $context = ($watched | ForEach-Object { "$_=$($row[$_])" }) -join ' '
-                    Add-Content -LiteralPath $changesPath -Value "$($row.time) CHANGE $k : $($previous[$k]) -> $($row[$k]) | $context"
+            # --- NETWORK / PPPoE ---------------------------------------------------
+            $pppIfs = @([System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() | Where-Object { $_.NetworkInterfaceType -eq 'Ppp' })
+            $row['pppUp'] = $(if ($pppIfs.Count -eq 0) { 'NO_PPP_INTERFACE' } elseif (@($pppIfs | Where-Object { "$($_.OperationalStatus)" -eq 'Up' }).Count -gt 0) { 'UP' } else { 'DOWN' })
+            $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Sort-Object -Property { $_.RouteMetric + $_.InterfaceMetric } | Select-Object -First 1
+            $row['defaultRouteIf'] = $(if ($route) { $route.InterfaceAlias } else { 'NONE' })
+            $inet = (Test-TcpPort -HostName $InternetProbeHost -Port 443 -TimeoutMs 2000) -or (Test-TcpPort -HostName $InternetProbeHost2 -Port 443 -TimeoutMs 2000)
+            $row['internet'] = $(if ($inet) { 'OK' } else { 'FAIL' })
+            $dnsServer = $null
+            if ($route) {
+                $dnsServer = (Get-DnsClientServerAddress -InterfaceIndex $route.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1).ServerAddresses | Select-Object -First 1
+            }
+            $row['dns'] = Test-Dns -Name $DnsProbeName -Server $dnsServer
+
+            # --- HOTSPOT -----------------------------------------------------------
+            $hs = $null
+            try { $hs = Get-HotspotRuntimeState } catch { }
+            $row['hotspotState'] = $(if ($hs) { $hs.state } else { 'n/a' })
+            $row['hotspotClients'] = $(if ($hs) { $hs.clientCount } else { '' })
+            $row['bulbAssociated'] = $(if ($hs -and $bulbMac) { if (@($hs.clientMacs) -contains $bulbMac) { 'YES' } else { 'NO' } } else { 'unknown' })
+
+            $wifi = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.NdisPhysicalMedium -eq 9 -and $_.HardwareInterface } | Select-Object -First 1
+            $row['wifiAdapter'] = $(if ($wifi) { "$($wifi.Status)" } else { 'NOT_FOUND' })
+            $hsIf = Get-HotspotInterfaceIPv4
+            $hsAdapter = $(if ($hsIf) { Get-NetAdapter -IncludeHidden -InterfaceIndex $hsIf.InterfaceIndex -ErrorAction SilentlyContinue } else { $null })
+            $row['hotspotAdapter'] = $(if ($hsAdapter) { "$($hsAdapter.Status)" } else { 'NO_192.168.137.x_INTERFACE' })
+
+            # --- WIZ ---------------------------------------------------------------
+            $currentIp = Get-NeighborMacIp $bulbMac
+            if ($currentIp -and $currentIp -ne $WizIp) {
+                Add-Content -LiteralPath $changesPath -Value "$($row.time) BULB IP CHANGED $WizIp -> $currentIp"
+                $WizIp = $currentIp
+            }
+            $row['bulbIp'] = $WizIp
+            $icsEntries = @()
+            try { $icsEntries = @(Get-HostsIcsEntries) } catch { }
+            $row['bulbInHostsIcs'] = $(if (@($icsEntries | Where-Object { $_.ip -eq $WizIp }).Count -gt 0) { 'YES' } else { 'NO' })
+            # Only the hotspot interface's entry says something about the bulb (a static/"Permanent" entry elsewhere does not).
+            $neighbor = $(if ($hsIf) { Get-NetNeighbor -IPAddress $WizIp -InterfaceIndex $hsIf.InterfaceIndex -ErrorAction SilentlyContinue | Select-Object -First 1 } else { $null })
+            $row['bulbNeighbor'] = $(if (-not $hsIf) { 'NO_HOTSPOT_IF' } elseif ($neighbor) { "$($neighbor.State)" } else { 'NONE' })
+            try {
+                $reply = $ping.Send($WizIp, 1000)
+                $row['bulbPing'] = $(if ($reply.Status -eq 'Success') { 'OK' } else { "$($reply.Status)" })
+                $row['bulbPingMs'] = $(if ($reply.Status -eq 'Success') { $reply.RoundtripTime } else { '' })
+            }
+            catch { $row['bulbPing'] = 'ERROR'; $row['bulbPingMs'] = '' }
+            $pilot = Invoke-WizQuery -IpAddress $WizIp -Method getPilot -TimeoutMs 1000 -Attempts 2
+            $row['bulbApi'] = $(if ($pilot.ok -and $pilot.json -and $pilot.json.PSObject.Properties['result']) { 'ONLINE' } else { 'OFFLINE' })
+            $row['bulbApiMs'] = $(if ($row['bulbApi'] -eq 'ONLINE') { $pilot.rttMs } else { '' })
+            $row['bulbRssi'] = $(if ($row['bulbApi'] -eq 'ONLINE' -and $pilot.json.result.PSObject.Properties['rssi']) { $pilot.json.result.rssi } else { '' })
+            $row['bulbOn'] = $(if ($row['bulbApi'] -eq 'ONLINE' -and $pilot.json.result.PSObject.Properties['state']) { $pilot.json.result.state } else { '' })
+            if (-not $bulbMac -and $row['bulbApi'] -eq 'ONLINE') {
+                $sys = Invoke-WizQuery -IpAddress $WizIp -Method getSystemConfig -TimeoutMs 1000 -Attempts 2
+                if ($sys.ok -and $sys.json -and $sys.json.PSObject.Properties['result']) { $bulbMac = ConvertTo-NormalizedMac ([string]$sys.json.result.mac); $maskedMac = Protect-WizMac $bulbMac }
+            }
+            $row['bulbMac'] = $maskedMac
+
+            # --- write ---------------------------------------------------------------
+            [pscustomobject]$row | Export-Csv -LiteralPath $csvPath -Append -NoTypeInformation -Encoding UTF8
+            if ($null -eq $previous) {
+                $context = ($watched | ForEach-Object { "$_=$($row[$_])" }) -join ' '
+                Add-Content -LiteralPath $changesPath -Value "$($row.time) INITIAL STATE | $context"
+            }
+            if ($null -ne $previous) {
+                foreach ($k in $watched) {
+                    if ("$($previous[$k])" -ne "$($row[$k])") {
+                        $context = ($watched | ForEach-Object { "$_=$($row[$_])" }) -join ' '
+                        Add-Content -LiteralPath $changesPath -Value "$($row.time) CHANGE $k : $($previous[$k]) -> $($row[$k]) | $context"
+                    }
                 }
             }
+            $previous = $row
+
+            $status = "[{0}] [NETWORK] PPPoE: {1} Internet: {2} DNS: {3} | [HOTSPOT] {4} clients={5} wifi={6} | [WIZ] assoc={7} dhcp={8} arp={9} ping={10} api={11} {12}ms rssi={13}" -f `
+                $row.time, $row['pppUp'], $row['internet'], $row['dns'], $row['hotspotState'], $row['hotspotClients'], $row['wifiAdapter'],
+            $row['bulbAssociated'], $row['bulbInHostsIcs'], $row['bulbNeighbor'], $row['bulbPing'], $row['bulbApi'], $row['bulbApiMs'], $row['bulbRssi']
+            $color = $(if ($row['bulbApi'] -eq 'ONLINE') { 'Gray' } else { 'Yellow' })
+            Write-Host $status -ForegroundColor $color
         }
-        $previous = $row
+        catch {
+            $msg = (Get-InnermostException $_.Exception).Message
+            Add-Content -LiteralPath $changesPath -Value "$($tick.ToString('yyyy-MM-dd HH:mm:ss')) ERROR during check: $msg"
+            Write-Host "[$($tick.ToString('HH:mm:ss'))] check failed: $msg" -ForegroundColor Red
+        }
 
-        $status = "[{0}] [NETWORK] PPPoE: {1} Internet: {2} DNS: {3} | [HOTSPOT] {4} clients={5} wifi={6} | [WIZ] assoc={7} dhcp={8} arp={9} ping={10} api={11} {12}ms rssi={13}" -f `
-            $row.time, $row['pppUp'], $row['internet'], $row['dns'], $row['hotspotState'], $row['hotspotClients'], $row['wifiAdapter'],
-        $row['bulbAssociated'], $row['bulbInHostsIcs'], $row['bulbNeighbor'], $row['bulbPing'], $row['bulbApi'], $row['bulbApiMs'], $row['bulbRssi']
-        $color = $(if ($row['bulbApi'] -eq 'ONLINE') { 'Gray' } else { 'Yellow' })
-        Write-Host $status -ForegroundColor $color
+        $lastTick = $tick
+        $elapsed = ((Get-Date) - $tick).TotalSeconds
+        $sleep = [math]::Max(1, $IntervalSeconds - $elapsed)
+        Start-Sleep -Seconds ([int]$sleep)
     }
-    catch {
-        $msg = (Get-InnermostException $_.Exception).Message
-        Add-Content -LiteralPath $changesPath -Value "$($tick.ToString('yyyy-MM-dd HH:mm:ss')) ERROR during check: $msg"
-        Write-Host "[$($tick.ToString('HH:mm:ss'))] check failed: $msg" -ForegroundColor Red
-    }
-
-    $elapsed = ((Get-Date) - $tick).TotalSeconds
-    $sleep = [math]::Max(1, $IntervalSeconds - $elapsed)
-    Start-Sleep -Seconds ([int]$sleep)
+}
+finally {
+    $lastText = $(if ($lastTick) { $lastTick.ToString('yyyy-MM-dd HH:mm:ss') } else { 'none' })
+    Add-Content -LiteralPath $changesPath -Value "$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss')) STOP monitoring ended; last completed check started at $lastText"
 }

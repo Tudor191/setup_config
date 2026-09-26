@@ -57,10 +57,15 @@ Everything goes to `audit\output\` (git-ignored):
 | `audit-<ts>\audit-report.json` | Full structured evidence |
 | `wiz-<ts>\wiz-probe.txt / .json` | Bulb module, firmware, RSSI, local API latency |
 | `watch-<ts>\watch.csv` | One row per check (PPPoE, internet, DNS, hotspot, adapter, DHCP, ARP, ping, WiZ API) |
-| `watch-<ts>\changes.log` | Only the moments something changed, with the full context at that moment |
+| `watch-<ts>\changes.log` | `START` (bulb neighbour/ARP entries), `INITIAL STATE`, every `CHANGE` with full context, `STOP` (when monitoring ended) |
 
-To share results: paste `audit-summary.txt`, `wiz-probe.txt` and `changes.log` into the chat, or commit
-the reviewed files with `git add -f audit/output/...`.
+To share results: attach `audit-summary.txt`, `wiz-probe.txt`, `changes.log` and **`watch.csv`**. Attach
+`audit-report.json` too: it holds the details the summary leaves out. Or commit the reviewed files
+with `git add -f audit/output/...`.
+
+Tool versions: collector **1.1** (summary now reports the internet path, ICS roles and "no PPPoE"
+explicitly; service restarts are matched by service name; the `wiz_xxxxxx` host name is masked). Watch:
+the ARP column now reads only the hotspot interface.
 
 ## What each script looks at
 

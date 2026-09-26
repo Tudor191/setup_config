@@ -66,6 +66,7 @@ function Protect-Text {
         - public IPv4 / global IPv6 addresses (lines mentioning "version"/"driver"/"build" are skipped for IPv4,
           because driver version strings look like IPv4 addresses)
         - e-mail addresses (PPPoE user names are often in this form)
+        - WiZ DHCP host names (wiz_<last 6 MAC hex digits>)
     #>
     param([AllowNull()][AllowEmptyString()][string]$Text)
     if ([string]::IsNullOrEmpty($Text)) { return $Text }
@@ -82,6 +83,9 @@ function Protect-Text {
         '${1}${2}${3}${2}${4}${2}xx${2}xx${2}xx')
 
     $result = [regex]::Replace($result, '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', '<email>')
+
+    # WiZ DHCP host names end with the last 6 hex digits of the bulb's MAC address.
+    $result = [regex]::Replace($result, '(?i)\bwiz_[0-9a-f]{6}\b', 'wiz_xxxxxx')
 
     $lines = $result -split "`n"
     for ($i = 0; $i -lt $lines.Count; $i++) {

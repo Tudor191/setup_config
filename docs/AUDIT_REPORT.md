@@ -4,8 +4,19 @@
 |---|---|
 | Date | 2026-09-26 |
 | Phase | 1: audit only. **Nothing has been implemented, installed or changed on the PC.** |
-| Status | **Research complete. On-PC evidence PENDING** (see "Audit method and limitation") |
-| Next step | You run the read-only tools in [`audit/`](../audit/README.md), and I then fill in every item marked PENDING |
+| Status | Research complete. **First on-PC results received**: see **[AUDIT_UPDATE_01_PC_RESULTS.md](AUDIT_UPDATE_01_PC_RESULTS.md)**. Where the two documents disagree, the update wins. |
+| Next step | Test C ("hotspot restart recovery"), described in the update, section 12 |
+
+> **Corrections from real PC data (2026-09-26)** – details in the update document:
+> * The PC is **not using PPPoE**: no PPP interface, default route via Ethernet, one failed dial in 14 days.
+>   Topology descriptions below that put PPPoE on the PC are superseded.
+> * The keyboard is **0C45:5004**, not the 320F:5000/5055 claimed by the community plugin.
+> * The SignalRGB API returns **403** (Pro / sign-in required) on this PC.
+> * The hotspot is 2.4 GHz, WPA2, auto-off disabled, so **H3, H4 and H5 are eliminated**. H6 and H8 are
+>   weakened; H7 is present as a risk factor.
+> * The Wi-Fi chip is a **Realtek RTL8852CE**. Mic is **0951:171F**, mouse **1038:1832**,
+>   RGB controller **048D:5702** (all confirmed). No Gigabyte RGB software is installed. NZXT CAM is.
+> * The WiZ local API is **confirmed working** (module ESP25_SHRGB_01, firmware 1.38.0, RSSI −44 dBm).
 
 ## Audit method and limitation (read first)
 
@@ -38,12 +49,12 @@ Labels used below: **VERIFIED** (confirmed in a primary source), **PENDING** (ne
 
 | Component | What you reported | Expected hardware identity (from sources) | Actual on your PC |
 |---|---|---|---|
-| Motherboard RGB + fans | Gigabyte B650 GAMING X AX V2, detected by SignalRGB | ITE **IT5702** USB RGB controller, **VID 048D / PID 5702**, OpenRGB "layout 24" [S4] | PENDING |
-| Mouse | SteelSeries Sensei Ten | **1038:1832** (Sensei TEN) or **1038:1834** (CS:GO Neon Rider Ed.), HID interface 0 [S2][S4][S6] | PENDING |
-| Microphone | HyperX QuadCast S | **0951:171F** (Kingston-era) or HP-era **03F0:0F8B / 068C / 0294 / 028C / 048C / 0D8B** [S4][S5][S6] | PENDING |
-| Keyboard | Redragon Kala Black (K557 KALA) | **Not established.** One community plugin claims **320F:5000 / 320F:5055** (EVision controller) [S12] | PENDING |
-| Smart bulb | Philips "PHI WFB 100W A60 E27" (WiZ) | WiZ Wi-Fi module; RGB + tunable white; local UDP API on port 38899 [S13][S14] | PENDING (`Probe-WizBulb.ps1`) |
-| Network | PPPoE on the PC → Windows Mobile Hotspot (2.4 GHz) → bulb | Wi-Fi chip depends on **board revision**: Rev 1.0 Realtek RTL8852CE, Rev 1.1 AMD RZ616 (MediaTek MT7922), Rev 1.2/1.3 Intel AX210 [S19 *(snippet)*] | PENDING |
+| Motherboard RGB + fans | Gigabyte B650 GAMING X AX V2, detected by SignalRGB | ITE **IT5702** USB RGB controller, **VID 048D / PID 5702**, OpenRGB "layout 24" [S4] | **048D:5702 confirmed** (usage page FF89) |
+| Mouse | SteelSeries Sensei Ten | **1038:1832** (Sensei TEN) or **1038:1834** (CS:GO Neon Rider Ed.), HID interface 0 [S2][S4][S6] | **1038:1832 confirmed** |
+| Microphone | HyperX QuadCast S | **0951:171F** (Kingston-era) or HP-era **03F0:0F8B / 068C / 0294 / 028C / 048C / 0D8B** [S4][S5][S6] | **0951:171F confirmed** (audio function 0951:171D) |
+| Keyboard | Redragon Kala Black (K557 KALA) | **Not established.** One community plugin claims **320F:5000 / 320F:5055** (EVision controller) [S12] | **0C45:5004**: contradicts the plugin; OpenRGB EVision lists this ID |
+| Smart bulb | Philips "PHI WFB 100W A60 E27" (WiZ) | WiZ Wi-Fi module; RGB + tunable white; local UDP API on port 38899 [S13][S14] | **ESP25_SHRGB_01, fw 1.38.0, local API answers** |
+| Network | PPPoE on the PC → Windows Mobile Hotspot (2.4 GHz) → bulb | Wi-Fi chip depends on **board revision**: Rev 1.0 Realtek RTL8852CE, Rev 1.1 AMD RZ616 (MediaTek MT7922), Rev 1.2/1.3 Intel AX210 [S19 *(snippet)*] | **No PPPoE on the PC (Ethernet default route)**; Realtek RTL8852CE |
 
 The Wi-Fi chip matters because Windows Mobile Hotspot behaviour (supported bands, power saving,
 stability) is driver-specific. The collector reads the board revision (`Win32_BaseBoard.Version`) and the
@@ -355,13 +366,13 @@ Setup Controller).
 
 | Device | Control method | Colour | Brightness | On/Off | Effects | Local control | External dependency | Status | Confidence |
 |---|---|---|---|---|---|---|---|---|---|
-| Gigabyte B650 GAMING X AX V2 RGB + fans (IT5702) | SignalRGB REST API | **Indirect** (effect/preset; no solid-colour endpoint) | Yes (global 0–100) | Yes (canvas enabled, global) | Yes (effect library) | Yes (127.0.0.1:16038) | SignalRGB **Pro**, app running, HTTP API enabled | POSSIBLE | Medium |
+| Gigabyte B650 GAMING X AX V2 RGB + fans (IT5702) | SignalRGB REST API | **Indirect** (effect/preset; no solid-colour endpoint) | Yes (global 0–100) | Yes (canvas enabled, global) | Yes (effect library) | Yes (127.0.0.1:16038) | SignalRGB **Pro**, app running, HTTP API enabled. **On the PC: 403 = no Pro/sign-in** | POSSIBLE (only with Pro) | Medium |
 | ↳ alternative | OpenRGB SDK (TCP 6742) | Yes (per zone / per LED) | Via colour scaling | Via black / off mode | Yes (hardware modes) | Yes | OpenRGB running; SignalRGB must release the device | POSSIBLE | Medium |
 | SteelSeries Sensei Ten | GameSense (GG) | Yes (logo + wheel, mapping to confirm) | Via colour scaling | Black + continuous heartbeat; reverts to GG profile when released | Limited (flash; client-side animation) | Yes (127.0.0.1:random port) | SteelSeries GG running; app registered in GG | POSSIBLE | Medium-High |
 | HyperX QuadCast S | Direct HID feature reports (interface 0) | Yes (top + bottom) | Via colour scaling | Black (streamed) | Host-generated only | Yes (USB) | Resident streaming process; NGENUITY and SignalRGB must not drive it | POSSIBLE | Medium-High |
 | ↳ via NGENUITY | – | – | – | – | – | – | No API | NOT FEASIBLE | High |
-| Redragon Kala (K557) | Unknown (EVision protocol if 320F:5000/5055) | Unknown | EVision: 5 levels | EVision: brightness 0 | EVision: hardware modes | Yes (USB) | None | REQUIRES RESEARCH | Low |
-| Philips WiZ A60 | WiZ local UDP 38899 (pywizlight) | Yes (RGB + white temperature) | Yes (native %, lower limit uncertain) | Yes | Yes (~35 scenes) | Yes | None locally; cloud for Alexa/app; "Allow local communication" on | POSSIBLE → READY after probe | High |
+| Redragon Kala (K557) | Unknown. **On the PC: 0C45:5004**, an EVision candidate per OpenRGB | Unknown | EVision: 5 levels | EVision: brightness 0 | EVision: hardware modes | Yes (USB) | None | REQUIRES RESEARCH | Low |
+| Philips WiZ A60 | WiZ local UDP 38899 (pywizlight) | Yes (RGB + white temperature) | Yes (native %, lower limit uncertain) | Yes | Yes (~35 scenes) | Yes | None locally; cloud for Alexa/app; "Allow local communication" on | **READY** (probe answered) | High |
 
 "Via colour scaling" means dimming is done by multiplying the RGB values (for example 50 % red =
 `#800000`). It is reliable and safe on these LEDs, but it is labelled as such rather than presented
@@ -591,12 +602,12 @@ measured.
 
 | Device / area | Status | Why |
 |---|---|---|
-| Gigabyte B650 GAMING X AX V2 RGB + fans via SignalRGB | **POSSIBLE** | API exists but needs Pro; solid colour is indirect; on-PC evidence pending |
+| Gigabyte B650 GAMING X AX V2 RGB + fans via SignalRGB | **POSSIBLE** | API exists but needs Pro (**403 on the PC**); solid colour is indirect. OpenRGB is the no-Pro alternative. |
 | SteelSeries Sensei Ten via GameSense | **POSSIBLE** | Official API; zone mapping and GG presence to be confirmed |
 | HyperX QuadCast S via direct HID | **POSSIBLE** | Protocol documented by 2 independent projects; needs single-owner streaming. (Via NGENUITY: NOT FEASIBLE) |
-| Redragon Kala Black | **REQUIRES RESEARCH** | Hardware IDs unknown; only an unverified community protocol; bricking risk documented |
-| Philips WiZ bulb (local control) | **POSSIBLE** (→ READY once the probe answers) | Established protocol and library; local reachability pending |
-| WiZ disconnection problem | **REQUIRES RESEARCH** | Ten hypotheses; evidence tools ready |
+| Redragon Kala Black | **REQUIRES RESEARCH** | IDs now known (**0C45:5004**); EVision candidate pending an interface check; bricking risk documented |
+| Philips WiZ bulb (local control) | **READY** | The probe answered on the real bulb (read path) |
+| WiZ disconnection problem | **REQUIRES RESEARCH** | H3/H4/H5 eliminated, PPPoE-on-PC ruled out; next: test C (update doc, section 12) |
 | Alexa integration | **REQUIRES RESEARCH** | Deliberately deferred until the local controller is validated |
 
 **Phase 1 stops here.** Nothing will be implemented until you answer the questions above and approve an

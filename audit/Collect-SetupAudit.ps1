@@ -40,7 +40,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib\AuditCommon.ps1')
 
-$ScriptVersion = '1.0.0'
+$ScriptVersion = '1.1.0'
 if (-not $OutputDir) {
     $OutputDir = Join-Path $PSScriptRoot ('output\audit-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 }
@@ -49,7 +49,7 @@ New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 Register-StandardRedactions
 
 # Vendor / software names relevant to this audit (lighting software and anything known to fight over RGB devices).
-$VendorRegex = '(?i)signal\s*rgb|whirlwind|vortx|gigabyte|aorus|rgb\s*fusion|control\s*center|gcc|easytune|app\s*center|' +
+$VendorRegex = '(?i)signal\s*rgb|whirlwind|vortx|gigabyte|aorus|rgb\s*fusion|control\s*center|\bgcc\b|easytune|app\s*center|' +
 'steelseries|sonar|hyperx|ngenuity|kingston|redragon|k557|kala|\bwiz\b|openrgb|icue|corsair|armou?ry|aura|lightingservice|' +
 'razer|synapse|logitech|lghub|g\s*hub|msi\s*center|mystic|dragon\s*center|nzxt|polychrome|asrock|l-connect|lian\s*li|' +
 'thermaltake|tt\s*rgb|cooler\s*master|masterplus|nahimic|alexa|amazon|wireshark|npcap|usbpcap|zadig|libusb'
@@ -817,12 +817,30 @@ Invoke-Section $report 'eventLogs' {
     $out['systemEvents'] = $sys
 
     # 3) Service start/stop events for the hotspot, ICS, WLAN and RAS services (display names are localized).
+    #    The event's binary data carries the service key name (UTF-16), which does not depend on the UI language.
     $displayNames = @(Get-Service -Name $NetworkServiceNames -ErrorAction SilentlyContinue | ForEach-Object { $_.DisplayName })
-    $scm = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Service Control Manager'; Id = @(7031, 7034, 7036, 7040, 7043); StartTime = $start } -MaxEvents 20000 -ErrorAction SilentlyContinue | Where-Object {
+    $scm = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Service Control Manager'; Id = @(7031, 7034, 7036, 7040, 7043); StartTime = $start } -MaxEvents 20000 -ErrorAction SilentlyContinue | ForEach-Object {
+            $e = $_
+            $serviceName = $null
+            try {
+                $bin = [regex]::Match($e.ToXml(), '<Binary>([0-9A-Fa-f]+)</Binary>')
+                if ($bin.Success) {
+                    $hex = $bin.Groups[1].Value
+                    $bytes = New-Object byte[] ($hex.Length / 2)
+                    for ($i = 0; $i -lt $bytes.Length; $i++) { $bytes[$i] = [Convert]::ToByte($hex.Substring($i * 2, 2), 16) }
+                    $serviceName = [System.Text.Encoding]::Unicode.GetString($bytes).Trim([char]0)
+                }
+            }
+            catch { }
             $first = $null
-            try { $first = [string]$_.Properties[0].Value } catch { }
-            $first -and ($displayNames -contains $first)
-        } | Select-Object -First $MaxEventsPerLog | ForEach-Object { ConvertTo-EventRow $_ })
+            try { $first = [string]$e.Properties[0].Value } catch { }
+            $matchedName = $(if ($serviceName -and ($NetworkServiceNames -contains $serviceName)) { $serviceName } elseif ($first -and ($displayNames -contains $first)) { $first } else { $null })
+            if ($matchedName) {
+                $row = ConvertTo-EventRow $e
+                $row['service'] = $matchedName
+                $row
+            }
+        } | Select-Object -First $MaxEventsPerLog)
     $out['networkServiceStateChanges'] = $scm
 
     # 4) PPPoE dial / disconnect history.
@@ -882,8 +900,8 @@ try {
 
     $lines.Add('')
     $lines.Add('[SOFTWARE] Vendor software found:')
-    foreach ($s in @(Get-Value $report @('installedSoftware', 'win32'))) { if ($s -is [System.Collections.IDictionary]) { $lines.Add("  $($s['name']) $($s['version'])") } }
-    foreach ($s in @(Get-Value $report @('installedSoftware', 'storeApps'))) { if ($s -is [System.Collections.IDictionary] -and $s.Contains('name')) { $lines.Add("  [Store] $($s['name']) $($s['version'])") } }
+    foreach ($s in @(Get-Value $report @('installedSoftware', 'win32'))) { if ($s -is [System.Collections.IDictionary]) { $lines.Add("  $($s['name']) (version $($s['version']))") } }
+    foreach ($s in @(Get-Value $report @('installedSoftware', 'storeApps'))) { if ($s -is [System.Collections.IDictionary] -and $s.Contains('name')) { $lines.Add("  [Store] $($s['name']) (version $($s['version']))") } }
     $lines.Add('[SOFTWARE] Vendor processes running:')
     foreach ($p in @($report['processes'])) { if ($p -is [System.Collections.IDictionary] -and $p.Contains('name')) { $lines.Add("  $($p['name']) (pid $($p['processId']))") } }
     $lines.Add('[SOFTWARE] Vendor services:')
@@ -902,11 +920,29 @@ try {
         $lines.Add("[HOTSPOT] band support: $((($hs['bandSupported'].GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ', '))")
     }
     elseif ($hs -is [System.Collections.IDictionary]) { $lines.Add("[HOTSPOT] $(($hs.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join '; ')") }
-    foreach ($c in @(Get-Value $report @('internetConnectionSharing', 'connections'))) {
-        if ($c -is [System.Collections.IDictionary] -and $c['sharingEnabled']) { $lines.Add("[ICS] $($c['name']) [$($c['mediaType'])] -> $($c['sharingRole'])") }
+    $icsConnections = Get-Value $report @('internetConnectionSharing', 'connections')
+    if ($icsConnections -is [string]) { $lines.Add("[ICS] $icsConnections") }
+    else {
+        $shared = @(@($icsConnections) | Where-Object { $_ -is [System.Collections.IDictionary] -and $_['sharingEnabled'] })
+        $lines.Add("[ICS] connections enumerated: $(@($icsConnections).Count); with sharing enabled: $($shared.Count)")
+        foreach ($c in $shared) { $lines.Add("[ICS] $($c['name']) [$($c['mediaType'])] -> $($c['sharingRole'])") }
     }
     foreach ($e in @(Get-Value $report @('internetConnectionSharing', 'hostsIcs'))) { if ($e -is [pscustomobject]) { $lines.Add("[ICS DHCP] $($e.ip) $($e.hostName)") } }
-    foreach ($p in @(Get-Value $report @('pppoe', 'pppInterfaces'))) { if ($p -is [System.Collections.IDictionary]) { $lines.Add("[PPPOE] $($p['name']) status=$($p['status']) mtu=$($p['ipv4Mtu'])") } }
+    $pppList = @(@(Get-Value $report @('pppoe', 'pppInterfaces')) | Where-Object { $_ -is [System.Collections.IDictionary] })
+    if ($pppList.Count -eq 0) { $lines.Add('[PPPOE] no PPP interface present at collection time') }
+    foreach ($p in $pppList) { $lines.Add("[PPPOE] $($p['name']) status=$($p['status']) mtu=$($p['ipv4Mtu'])") }
+    $routes = @(@(Get-Value $report @('ipConfiguration', 'defaultRoutes')) | Where-Object { $_ -is [System.Collections.IDictionary] -and $_['destination'] -eq '0.0.0.0/0' } | Sort-Object { [int]$_['routeMetric'] })
+    foreach ($r in $routes) {
+        $addrs = @(@(Get-Value $report @('ipConfiguration', 'addresses')) | Where-Object { $_ -is [System.Collections.IDictionary] -and $_['ifIndex'] -eq $r['ifIndex'] -and $_['family'] -eq 'IPv4' })
+        $kind = 'no IPv4 address'
+        if ($addrs.Count -gt 0) {
+            $a0 = [string]$addrs[0]['address']
+            if ($a0 -eq '<public-ip>') { $kind = 'PUBLIC address (no NAT router between this PC and the ISP)' }
+            elseif ($a0 -match '^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.') { $kind = 'carrier-grade NAT address (ISP-side NAT)' }
+            else { $kind = "private address $a0 (a NAT router is upstream of this PC)" }
+        }
+        $lines.Add("[INTERNET] default route via '$($r['interface'])' gateway $($r['nextHop']) metric $($r['routeMetric']); interface has a $kind")
+    }
     foreach ($a in @($report['networkAdapters'])) {
         if ($a -is [System.Collections.IDictionary] -and $a['isWifi'] -and $a['hardwareInterface']) {
             $lines.Add("[WIFI] $($a['description']) | driver $($a['driverProvider']) $($a['driverVersion']) ($($a['driverDate'])) | status $($a['status'])")
@@ -919,7 +955,8 @@ try {
     if ($ev -is [System.Collections.IDictionary] -and $ev.Contains('rasClientEvents')) {
         $lines.Add("[EVENTS] last $EventDays days:")
         $lines.Add("  RasClient (PPPoE) events by id: $((@($ev['rasClientEvents']) | Group-Object { $_['id'] } | ForEach-Object { "$($_.Name)x$($_.Count)" }) -join ', ')")
-        $lines.Add("  Hotspot/ICS/WLAN/RAS service state changes: $(@($ev['networkServiceStateChanges']).Count)")
+        $svcChanges = @($ev['networkServiceStateChanges'])
+        $lines.Add("  Hotspot/ICS/WLAN/RAS service state changes: $($svcChanges.Count) $(if ($svcChanges.Count) { '(' + ((@($svcChanges | Group-Object { $_['service'] } | ForEach-Object { "$($_.Name)x$($_.Count)" })) -join ', ') + ')' })")
         $lines.Add("  Matched System events by provider: $((@($ev['systemEvents']) | Group-Object { $_['provider'] } | ForEach-Object { "$($_.Name)x$($_.Count)" }) -join ', ')")
     }
     $lines.Add('')
