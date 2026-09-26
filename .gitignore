@@ -1,0 +1,2 @@
+# Audit output can contain device and network details: review before committing (git add -f).
+audit/output/
