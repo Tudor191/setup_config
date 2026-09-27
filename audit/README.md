@@ -39,9 +39,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Collect-SetupAudit.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Probe-WizBulb.ps1
 #    If nothing is found:  -IpAddress 192.168.137.x   or   -SweepHotspotSubnet
 
-# 3) WiZ disconnection logger: leave it running until at least one disconnection has happened
-#    (ideally 2–3 days). Stop with Ctrl+C. It only observes; it never tries to recover anything.
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Watch-WizConnectivity.ps1 -WizIp 192.168.137.x
+# 3) WiZ long-run monitor (v2): leave it running until the bulb fails (can be hours).
+#    Press M in its window when Alexa stops controlling the bulb. Stop with Ctrl+C.
+#    It only observes; it never tries to recover anything.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Watch-WizConnectivity.ps1
 ```
 
 When the bulb drops, please also note (outside the PC): does the WiZ app on your phone show it offline?
@@ -56,8 +57,10 @@ Everything goes to `audit\output\` (git-ignored):
 | `audit-<ts>\audit-summary.txt` | Short human-readable summary: **start here** |
 | `audit-<ts>\audit-report.json` | Full structured evidence |
 | `wiz-<ts>\wiz-probe.txt / .json` | Bulb module, firmware, RSSI, local API latency |
-| `watch-<ts>\watch.csv` | One row per check (PPPoE, internet, DNS, hotspot, adapter, DHCP, ARP, ping, WiZ API) |
-| `watch-<ts>\changes.log` | `START` (bulb neighbour/ARP entries), `INITIAL STATE`, every `CHANGE` with full context, `STOP` (when monitoring ended) |
+| `longrun-<ts>\watch-report.txt` | Monitor summary: configuration, **incident analysis (first failing layer, questions A–K)**, all state changes, snapshots. **Send this.** |
+| `longrun-<ts>\watch.csv` | One row per check (internet, DNS, hotspot, Wi-Fi adapter power state, services, DHCP, ARP, ping, WiZ API, idle time). **Send this.** |
+| `longrun-<ts>\events.log` | Captured Windows events (Wi-Fi driver, NDIS, PnP, power, hotspot/ICS/WLAN services). **Send this.** |
+| `longrun-<ts>\changes.log`, `snapshot-*.txt` | Live change log and detailed snapshots (already included in the report) |
 
 To share results: attach `audit-summary.txt`, `wiz-probe.txt`, `changes.log` and **`watch.csv`**. Attach
 `audit-report.json` too: it holds the details the summary leaves out. Or commit the reviewed files
@@ -83,6 +86,11 @@ restarts, Wi-Fi driver, NDIS, power and sleep) for the last 14 days.
 **Probe-WizBulb.ps1**: finds the bulb via `hosts.ics` and the hotspot's neighbour table, then reads its
 module name, firmware, current state, RSSI and UDP latency.
 
-**Watch-WizConnectivity.ps1**: every 30 s records each layer of the path (PPPoE → internet → DNS →
-hotspot → Wi-Fi adapter → bulb association → DHCP → ARP → ping → WiZ API), so the first failing layer can
-be identified.
+**Watch-WizConnectivity.ps1** (v2, long-run monitor): every 10 s it checks internet, DNS, hotspot, the
+Wi-Fi adapter (including its device power state, re-enumeration and traffic counters), the hotspot/ICS/WLAN
+services, and the bulb's association, DHCP entry and ARP state. It pings the bulb and sends the read-only
+`getPilot` every 30 s. It collects the relevant Windows events continuously. When the bulb stops
+answering it writes an incident analysis naming the first failing layer. Details:
+[`docs/AUDIT_UPDATE_02_LONGRUN_TEST.md`](../docs/AUDIT_UPDATE_02_LONGRUN_TEST.md). The only thing it
+changes is its own console window's QuickEdit mode (so a stray click cannot pause it); that ends when
+the window closes.

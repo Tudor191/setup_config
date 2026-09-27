@@ -5,7 +5,7 @@
 | Date | 2026-09-26 |
 | Phase | 1: audit only. **Nothing has been implemented, installed or changed on the PC.** |
 | Status | Research complete. **First on-PC results received**: see **[AUDIT_UPDATE_01_PC_RESULTS.md](AUDIT_UPDATE_01_PC_RESULTS.md)**. Where the two documents disagree, the update wins. |
-| Next step | Test C ("hotspot restart recovery"), described in the update, section 12 |
+| Next step | Long-run failure capture: see **[AUDIT_UPDATE_02_LONGRUN_TEST.md](AUDIT_UPDATE_02_LONGRUN_TEST.md)** (test C was done; the bulb reconnects after a hotspot restart) |
 
 > **Corrections from real PC data (2026-09-26)** – details in the update document:
 > * The PC is **not using PPPoE**: no PPP interface, default route via Ethernet, one failed dial in 14 days.

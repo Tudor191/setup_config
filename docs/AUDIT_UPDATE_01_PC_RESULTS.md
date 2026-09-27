@@ -287,6 +287,10 @@ back**. Section 12 gives the one test that closes that gap.
 
 ## 12. RECOMMENDED NEXT DIAGNOSTIC TEST (one test)
 
+> **Result (reported 2026-09-27):** the bulb **reconnects by itself** after a hotspot Off → On. Test C
+> therefore did not reproduce the problem. The next step is
+> [AUDIT_UPDATE_02_LONGRUN_TEST.md](AUDIT_UPDATE_02_LONGRUN_TEST.md).
+
 ### Test C: "hotspot restart recovery", with the internet untouched
 
 **Why this one, and not the others**

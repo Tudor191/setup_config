@@ -821,17 +821,7 @@ Invoke-Section $report 'eventLogs' {
     $displayNames = @(Get-Service -Name $NetworkServiceNames -ErrorAction SilentlyContinue | ForEach-Object { $_.DisplayName })
     $scm = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Service Control Manager'; Id = @(7031, 7034, 7036, 7040, 7043); StartTime = $start } -MaxEvents 20000 -ErrorAction SilentlyContinue | ForEach-Object {
             $e = $_
-            $serviceName = $null
-            try {
-                $bin = [regex]::Match($e.ToXml(), '<Binary>([0-9A-Fa-f]+)</Binary>')
-                if ($bin.Success) {
-                    $hex = $bin.Groups[1].Value
-                    $bytes = New-Object byte[] ($hex.Length / 2)
-                    for ($i = 0; $i -lt $bytes.Length; $i++) { $bytes[$i] = [Convert]::ToByte($hex.Substring($i * 2, 2), 16) }
-                    $serviceName = [System.Text.Encoding]::Unicode.GetString($bytes).Trim([char]0)
-                }
-            }
-            catch { }
+            $serviceName = Get-ScmEventServiceName $e
             $first = $null
             try { $first = [string]$e.Properties[0].Value } catch { }
             $matchedName = $(if ($serviceName -and ($NetworkServiceNames -contains $serviceName)) { $serviceName } elseif ($first -and ($displayNames -contains $first)) { $first } else { $null })
@@ -927,7 +917,7 @@ try {
         $lines.Add("[ICS] connections enumerated: $(@($icsConnections).Count); with sharing enabled: $($shared.Count)")
         foreach ($c in $shared) { $lines.Add("[ICS] $($c['name']) [$($c['mediaType'])] -> $($c['sharingRole'])") }
     }
-    foreach ($e in @(Get-Value $report @('internetConnectionSharing', 'hostsIcs'))) { if ($e -is [pscustomobject]) { $lines.Add("[ICS DHCP] $($e.ip) $($e.hostName)") } }
+    foreach ($e in @(Get-Value $report @('internetConnectionSharing', 'hostsIcs'))) { if ($e -is [pscustomobject]) { $lines.Add("[ICS DHCP] $($e.ip) $($e.hostName) lease end $($e.leaseEnd)") } }
     $pppList = @(@(Get-Value $report @('pppoe', 'pppInterfaces')) | Where-Object { $_ -is [System.Collections.IDictionary] })
     if ($pppList.Count -eq 0) { $lines.Add('[PPPOE] no PPP interface present at collection time') }
     foreach ($p in $pppList) { $lines.Add("[PPPOE] $($p['name']) status=$($p['status']) mtu=$($p['ipv4Mtu'])") }

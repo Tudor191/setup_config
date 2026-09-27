@@ -375,19 +375,47 @@ function Get-HotspotRuntimeState {
 }
 
 function Get-HostsIcsEntries {
-    <# ICS writes DHCP clients (IP + host name) to hosts.ics. #>
+    <#
+      ICS writes its DHCP clients to hosts.ics as "<ip> <host> # <lease end>".
+      The lease end is a SYSTEMTIME written as "year month day-of-week day hour minute second ms"
+      (observed on the audited PC; the time base is most likely UTC).
+    #>
     $path = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts.ics'
     if (-not (Test-Path -LiteralPath $path)) { return @() }
     $entries = @()
     foreach ($line in (Get-Content -LiteralPath $path -ErrorAction Stop)) {
         $t = $line.Trim()
         if ($t -eq '' -or $t.StartsWith('#')) { continue }
+        $comment = ''
+        $hash = $t.IndexOf('#')
+        if ($hash -ge 0) { $comment = $t.Substring($hash + 1).Trim(); $t = $t.Substring(0, $hash).Trim() }
         $parts = $t -split '\s+'
-        if ($parts.Count -ge 2) {
-            $entries += [pscustomobject]@{ ip = $parts[0]; hostName = ($parts[1..($parts.Count - 1)] -join ' ') }
+        if ($parts.Count -lt 2) { continue }
+        $leaseEnd = $null
+        $f = @($comment -split '\s+' | Where-Object { $_ -match '^\d+$' })
+        if ($f.Count -ge 7) {
+            $leaseEnd = '{0:D4}-{1:D2}-{2:D2} {3:D2}:{4:D2}:{5:D2}' -f [int]$f[0], [int]$f[1], [int]$f[3], [int]$f[4], [int]$f[5], [int]$f[6]
         }
+        $entries += [pscustomobject]@{ ip = $parts[0]; hostName = $parts[1]; leaseEnd = $leaseEnd }
     }
     return $entries
+}
+
+function Get-ScmEventServiceName {
+    <#
+      Service Control Manager events carry the service key name (UTF-16) in their binary data,
+      which does not depend on the Windows display language. Returns $null if it cannot be read.
+    #>
+    param($WinEvent)
+    try {
+        $bin = [regex]::Match($WinEvent.ToXml(), '<Binary>([0-9A-Fa-f]+)</Binary>')
+        if (-not $bin.Success) { return $null }
+        $hex = $bin.Groups[1].Value
+        $bytes = New-Object byte[] ([int]($hex.Length / 2))
+        for ($i = 0; $i -lt $bytes.Length; $i++) { $bytes[$i] = [Convert]::ToByte($hex.Substring($i * 2, 2), 16) }
+        return [System.Text.Encoding]::Unicode.GetString($bytes).Trim([char]0)
+    }
+    catch { return $null }
 }
 
 function Get-HotspotInterfaceIPv4 {
